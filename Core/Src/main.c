@@ -19,17 +19,24 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "dma.h"
+#include "fatfs.h"
 #include "i2c.h"
 #include "sdio.h"
+#include "tim.h"
 #include "usart.h"
 #include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "app_ui.h"
+#include "data_logger.h"
 #include "key.h"
+#include "modbus_bus.h"
 #include "oled.h"
+#include "periodic_trigger.h"
 #include "pressure_sensor.h"
+#include "sensor_record.h"
+#include "telemetry_uart.h"
 #include "xda_sensor.h"
 
 /* USER CODE END Includes */
@@ -52,6 +59,8 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+static uint8_t s_sensor_poll_prefer_pressure = 0U;
+static SensorRecord_t s_periodic_record;
 
 /* USER CODE END PV */
 
@@ -100,13 +109,24 @@ int main(void)
   MX_USART2_UART_Init();
   MX_USART3_UART_Init();
   MX_SDIO_SD_Init();
+  MX_FATFS_Init();
+  MX_TIM6_Init();
+  MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
   if (OLED_Init(&hi2c1) != HAL_OK)
   {
     Error_Handler();
   }
-  XDA_Sensor_Init(&huart3, 0x02U);
-  PressureSensor_Init(&huart3, 0x01U);
+  ModbusBus_Init(&huart3);
+  XDA_Sensor_Init(0x02U);
+  PressureSensor_Init(0x01U);
+  PeriodicTrigger_Init();
+  DataLogger_Init();
+  TelemetryUart_Init(&huart1);
+  if (HAL_TIM_Base_Start_IT(&htim6) != HAL_OK)
+  {
+    Error_Handler();
+  }
   APP_UI_Init();
   APP_UI_UpdateXDASensorData(XDA_Sensor_GetData());
   APP_UI_UpdatePressureSensorData(PressureSensor_GetData());
@@ -120,18 +140,37 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    uint8_t pressure_sensor_updated;
-    uint8_t xda_sensor_updated;
+    SensorTaskEvent_t pressure_sensor_event;
+    SensorTaskEvent_t xda_sensor_event;
+    uint8_t periodic_5s_event;
+    uint8_t logger_status_changed;
+    uint8_t telemetry_status_changed;
     KeyEvent_t key_event;
 
-    xda_sensor_updated = XDA_Sensor_Task();
-    if (xda_sensor_updated != 0U)
+    ModbusBus_Task();
+
+    if (s_sensor_poll_prefer_pressure != 0U)
+    {
+      pressure_sensor_event = PressureSensor_Task();
+      xda_sensor_event = XDA_Sensor_Task();
+    }
+    else
+    {
+      xda_sensor_event = XDA_Sensor_Task();
+      pressure_sensor_event = PressureSensor_Task();
+    }
+
+    if (((pressure_sensor_event | xda_sensor_event) & SENSOR_TASK_EVENT_REQUEST_STARTED) != 0U)
+    {
+      s_sensor_poll_prefer_pressure ^= 1U;
+    }
+
+    if ((xda_sensor_event & SENSOR_TASK_EVENT_UI_MASK) != 0U)
     {
       APP_UI_UpdateXDASensorData(XDA_Sensor_GetData());
     }
 
-    pressure_sensor_updated = PressureSensor_Task();
-    if (pressure_sensor_updated != 0U)
+    if ((pressure_sensor_event & SENSOR_TASK_EVENT_UI_MASK) != 0U)
     {
       APP_UI_UpdatePressureSensorData(PressureSensor_GetData());
     }
@@ -143,7 +182,27 @@ int main(void)
       APP_UI_HandleKeyEvent(key_event);
     }
 
-    HAL_Delay(5);
+    periodic_5s_event = PeriodicTrigger_Consume5sEvent();
+    if (periodic_5s_event != 0U)
+    {
+      SensorRecord_Build(&s_periodic_record);
+      DataLogger_RequestSnapshot(&s_periodic_record);
+      TelemetryUart_RequestSend(&s_periodic_record);
+    }
+
+    telemetry_status_changed = TelemetryUart_Task();
+    logger_status_changed = 0U;
+    if (ModbusBus_IsBusy() == 0U)
+    {
+      logger_status_changed = DataLogger_Task();
+    }
+
+    if ((logger_status_changed != 0U) || (telemetry_status_changed != 0U))
+    {
+      APP_UI_RefreshServiceStatus();
+    }
+
+    __WFI();
   }
   /* USER CODE END 3 */
 }

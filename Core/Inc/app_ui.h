@@ -13,6 +13,7 @@ void APP_UI_Init(void);
 void APP_UI_HandleKeyEvent(KeyEvent_t event);
 void APP_UI_UpdatePressureSensorData(const PressureSensorData_t *sensor_data);
 void APP_UI_UpdateXDASensorData(const XDA_SensorData_t *sensor_data);
+void APP_UI_RefreshServiceStatus(void);
 
 #ifdef __cplusplus
 }

@@ -11,7 +11,7 @@ typedef enum
 {
   KEY_EVENT_NONE = 0,
   KEY_EVENT_SINGLE_CLICK,
-  KEY_EVENT_DOUBLE_CLICK
+  KEY_EVENT_LONG_PRESS
 } KeyEvent_t;
 
 void KEY_NotifyExti(uint16_t gpio_pin);

@@ -1,16 +1,18 @@
 #include "key.h"
 
 #define KEY_DEBOUNCE_MS 30U
-#define KEY_DOUBLE_CLICK_MS 300U
+#define KEY_LONG_PRESS_MS 700U
 
 static volatile uint32_t s_last_irq_tick = 0U;
-static volatile uint32_t s_first_click_tick = 0U;
-static volatile uint8_t s_click_count = 0U;
+static volatile uint32_t s_press_tick = 0U;
+static volatile uint8_t s_key_pressed = 0U;
+static volatile uint8_t s_long_press_reported = 0U;
 static volatile KeyEvent_t s_pending_event = KEY_EVENT_NONE;
 
 void KEY_NotifyExti(uint16_t gpio_pin)
 {
   uint32_t now;
+  GPIO_PinState pin_state;
 
   if (gpio_pin != KEY_Pin)
   {
@@ -24,36 +26,50 @@ void KEY_NotifyExti(uint16_t gpio_pin)
   }
 
   s_last_irq_tick = now;
-
-  if ((s_click_count == 1U) && ((now - s_first_click_tick) <= KEY_DOUBLE_CLICK_MS))
+  pin_state = HAL_GPIO_ReadPin(KEY_GPIO_Port, KEY_Pin);
+  if (pin_state == GPIO_PIN_SET)
   {
-    s_click_count = 0U;
-    s_pending_event = KEY_EVENT_DOUBLE_CLICK;
+    s_key_pressed = 1U;
+    s_press_tick = now;
+    s_long_press_reported = 0U;
     return;
   }
 
-  s_click_count = 1U;
-  s_first_click_tick = now;
-}
-
-void KEY_Task(void)
-{
-  uint32_t now = HAL_GetTick();
-
-  if ((s_click_count == 1U) && ((now - s_first_click_tick) > KEY_DOUBLE_CLICK_MS))
+  if (s_key_pressed != 0U)
   {
-    s_click_count = 0U;
-    if (s_pending_event == KEY_EVENT_NONE)
+    s_key_pressed = 0U;
+    if ((s_long_press_reported == 0U) && (s_pending_event == KEY_EVENT_NONE))
     {
       s_pending_event = KEY_EVENT_SINGLE_CLICK;
     }
   }
 }
 
+void KEY_Task(void)
+{
+  uint32_t now = HAL_GetTick();
+
+  if ((s_key_pressed != 0U) &&
+      (s_long_press_reported == 0U) &&
+      ((now - s_press_tick) >= KEY_LONG_PRESS_MS))
+  {
+    s_long_press_reported = 1U;
+    s_pending_event = KEY_EVENT_LONG_PRESS;
+  }
+}
+
 KeyEvent_t KEY_GetEvent(void)
 {
-  KeyEvent_t event = s_pending_event;
+  uint32_t primask;
+  KeyEvent_t event;
 
+  primask = __get_PRIMASK();
+  __disable_irq();
+  event = s_pending_event;
   s_pending_event = KEY_EVENT_NONE;
+  if (primask == 0U)
+  {
+    __enable_irq();
+  }
   return event;
 }

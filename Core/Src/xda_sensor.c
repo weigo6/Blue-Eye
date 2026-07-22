@@ -1,49 +1,79 @@
 #include "xda_sensor.h"
 
+#include "modbus_bus.h"
+
 #define XDA_SENSOR_REG_DATA_START 0x0000U
 #define XDA_SENSOR_REG_COUNT 4U
 #define XDA_SENSOR_POLL_MS 1000U
-#define XDA_SENSOR_REQUEST_LEN 8U
-#define XDA_SENSOR_RESPONSE_LEN 13U
 #define XDA_SENSOR_UART_TIMEOUT_MS 200U
+#define XDA_SENSOR_OFFLINE_FAILURE_THRESHOLD 3U
 
-static UART_HandleTypeDef *s_sensor_uart = NULL;
 static uint8_t s_sensor_address = 0x02U;
-static uint32_t s_sensor_baud_rate = 9600U;
 static uint32_t s_last_poll_tick = 0U;
 static XDA_SensorData_t s_sensor_data = {0};
 
-static uint16_t XDA_ModbusCrc16(const uint8_t *buffer, uint16_t length);
-static HAL_StatusTypeDef XDA_TransmitReceiveFrame(const uint8_t *request,
-                                                  uint16_t request_length,
-                                                  uint8_t *response,
-                                                  uint16_t response_length);
-static uint8_t XDA_ReadRealtimeDataOnce(XDA_SensorStatus_t *failure_status);
-static uint8_t XDA_ReadRealtimeData(void);
+static XDA_SensorStatus_t XDA_MapBusResult(const ModbusBusResult_t *result);
+static SensorTaskEvent_t XDA_ApplyResult(const ModbusBusResult_t *result);
+static void XDA_SetFailure(XDA_SensorStatus_t status, uint8_t exception_code);
 
-void XDA_Sensor_Init(UART_HandleTypeDef *huart, uint8_t slave_address)
+void XDA_Sensor_Init(uint8_t slave_address)
 {
-  s_sensor_uart = huart;
   s_sensor_address = slave_address;
-  s_sensor_baud_rate = (huart != NULL) ? huart->Init.BaudRate : 9600U;
   s_last_poll_tick = 0U;
+  s_sensor_data.ec_x100 = 0U;
+  s_sensor_data.temperature_x10 = 0;
+  s_sensor_data.tds_ppm = 0U;
+  s_sensor_data.salinity_ppm = 0U;
   s_sensor_data.status = XDA_SENSOR_STATUS_IDLE;
   s_sensor_data.online = 0U;
   s_sensor_data.slave_address = s_sensor_address;
-  s_sensor_data.baud_rate = s_sensor_baud_rate;
+  s_sensor_data.baud_rate = ModbusBus_GetBaudRate();
+  s_sensor_data.last_update_tick = 0U;
+  s_sensor_data.last_attempt_tick = 0U;
+  s_sensor_data.sample_sequence = 0U;
+  s_sensor_data.success_count = 0U;
+  s_sensor_data.error_count = 0U;
+  s_sensor_data.consecutive_failure_count = 0U;
+  s_sensor_data.last_exception_code = 0U;
 }
 
-uint8_t XDA_Sensor_Task(void)
+SensorTaskEvent_t XDA_Sensor_Task(void)
 {
+  ModbusBusResult_t result;
   uint32_t now = HAL_GetTick();
 
-  if ((s_sensor_uart == NULL) || ((now - s_last_poll_tick) < XDA_SENSOR_POLL_MS))
+  if (ModbusBus_TakeResult(MODBUS_BUS_CLIENT_XDA, &result) != 0U)
   {
-    return 0U;
+    return XDA_ApplyResult(&result);
+  }
+
+  if (ModbusBus_IsClientPending(MODBUS_BUS_CLIENT_XDA) != 0U)
+  {
+    return SENSOR_TASK_EVENT_NONE;
+  }
+
+  if ((now - s_last_poll_tick) < XDA_SENSOR_POLL_MS)
+  {
+    return SENSOR_TASK_EVENT_NONE;
+  }
+
+  if (ModbusBus_StartReadHoldingRegisters(MODBUS_BUS_CLIENT_XDA,
+                                           s_sensor_address,
+                                           XDA_SENSOR_REG_DATA_START,
+                                           XDA_SENSOR_REG_COUNT,
+                                           XDA_SENSOR_UART_TIMEOUT_MS) == 0U)
+  {
+    return SENSOR_TASK_EVENT_NONE;
   }
 
   s_last_poll_tick = now;
-  return XDA_ReadRealtimeData();
+  s_sensor_data.last_attempt_tick = now;
+  return SENSOR_TASK_EVENT_REQUEST_STARTED;
+}
+
+uint8_t XDA_Sensor_IsBusy(void)
+{
+  return ModbusBus_IsClientPending(MODBUS_BUS_CLIENT_XDA);
 }
 
 const XDA_SensorData_t *XDA_Sensor_GetData(void)
@@ -51,121 +81,83 @@ const XDA_SensorData_t *XDA_Sensor_GetData(void)
   return &s_sensor_data;
 }
 
-static uint16_t XDA_ModbusCrc16(const uint8_t *buffer, uint16_t length)
+static XDA_SensorStatus_t XDA_MapBusResult(const ModbusBusResult_t *result)
 {
-  uint16_t crc = 0xFFFFU;
-  uint16_t index;
-  uint8_t bit;
-
-  for (index = 0U; index < length; index++)
+  if (result == NULL)
   {
-    crc ^= buffer[index];
-    for (bit = 0U; bit < 8U; bit++)
-    {
-      if ((crc & 0x0001U) != 0U)
-      {
-        crc = (crc >> 1U) ^ 0xA001U;
-      }
-      else
-      {
-        crc >>= 1U;
-      }
-    }
+    return XDA_SENSOR_STATUS_FRAME_ERROR;
   }
 
-  return crc;
+  switch (result->code)
+  {
+    case MODBUS_BUS_RESULT_TIMEOUT:
+      return XDA_SENSOR_STATUS_TIMEOUT;
+    case MODBUS_BUS_RESULT_UART_ERROR:
+      return XDA_SENSOR_STATUS_UART_ERROR;
+    case MODBUS_BUS_RESULT_CRC_ERROR:
+      return XDA_SENSOR_STATUS_CRC_ERROR;
+    case MODBUS_BUS_RESULT_EXCEPTION:
+      return XDA_SENSOR_STATUS_MODBUS_EXCEPTION;
+    case MODBUS_BUS_RESULT_FRAME_ERROR:
+    case MODBUS_BUS_RESULT_NONE:
+    default:
+      return XDA_SENSOR_STATUS_FRAME_ERROR;
+  }
 }
 
-static HAL_StatusTypeDef XDA_TransmitReceiveFrame(const uint8_t *request,
-                                                  uint16_t request_length,
-                                                  uint8_t *response,
-                                                  uint16_t response_length)
+static SensorTaskEvent_t XDA_ApplyResult(const ModbusBusResult_t *result)
 {
-  HAL_StatusTypeDef hal_status;
+  uint16_t ec_x100;
+  int16_t temperature_x10;
+  uint16_t tds_ppm;
+  uint16_t salinity_ppm;
 
-  __HAL_UART_CLEAR_OREFLAG(s_sensor_uart);
-  __HAL_UART_CLEAR_NEFLAG(s_sensor_uart);
-  __HAL_UART_CLEAR_FEFLAG(s_sensor_uart);
-  (void)__HAL_UART_FLUSH_DRREGISTER(s_sensor_uart);
-
-  hal_status = HAL_UART_Transmit(s_sensor_uart, (uint8_t *)request, request_length, XDA_SENSOR_UART_TIMEOUT_MS);
-  if (hal_status != HAL_OK)
+  if ((result == NULL) || (result->code != MODBUS_BUS_RESULT_OK))
   {
-    return hal_status;
+    XDA_SetFailure(XDA_MapBusResult(result), (result != NULL) ? result->exception_code : 0U);
+    return SENSOR_TASK_EVENT_STATUS_CHANGED;
   }
 
-  return HAL_UART_Receive(s_sensor_uart, response, response_length, XDA_SENSOR_UART_TIMEOUT_MS);
-}
-
-static uint8_t XDA_ReadRealtimeDataOnce(XDA_SensorStatus_t *failure_status)
-{
-  uint8_t request[XDA_SENSOR_REQUEST_LEN] = {0};
-  uint8_t response[XDA_SENSOR_RESPONSE_LEN] = {0};
-  uint16_t crc;
-  HAL_StatusTypeDef hal_status;
-
-  if (failure_status == NULL)
+  if (result->data_length != 8U)
   {
-    return 0U;
+    XDA_SetFailure(XDA_SENSOR_STATUS_FRAME_ERROR, 0U);
+    return SENSOR_TASK_EVENT_STATUS_CHANGED;
   }
 
-  request[0] = s_sensor_address;
-  request[1] = 0x03U;
-  request[2] = (uint8_t)(XDA_SENSOR_REG_DATA_START >> 8U);
-  request[3] = (uint8_t)(XDA_SENSOR_REG_DATA_START & 0xFFU);
-  request[4] = 0x00U;
-  request[5] = XDA_SENSOR_REG_COUNT;
+  ec_x100 = (uint16_t)(((uint16_t)result->data[0] << 8U) | result->data[1]);
+  temperature_x10 = (int16_t)(((uint16_t)result->data[2] << 8U) | result->data[3]);
+  tds_ppm = (uint16_t)(((uint16_t)result->data[4] << 8U) | result->data[5]);
+  salinity_ppm = (uint16_t)(((uint16_t)result->data[6] << 8U) | result->data[7]);
 
-  crc = XDA_ModbusCrc16(request, 6U);
-  request[6] = (uint8_t)(crc & 0xFFU);
-  request[7] = (uint8_t)(crc >> 8U);
-
-  hal_status = XDA_TransmitReceiveFrame(request, sizeof(request), response, sizeof(response));
-  if (hal_status != HAL_OK)
-  {
-    *failure_status = (hal_status == HAL_TIMEOUT) ? XDA_SENSOR_STATUS_TIMEOUT
-                                                  : XDA_SENSOR_STATUS_UART_ERROR;
-    return 0U;
-  }
-
-  if ((response[0] != s_sensor_address) || (response[1] != 0x03U) || (response[2] != 0x08U))
-  {
-    *failure_status = XDA_SENSOR_STATUS_FRAME_ERROR;
-    return 0U;
-  }
-
-  crc = XDA_ModbusCrc16(response, 11U);
-  if ((response[11] != (uint8_t)(crc & 0xFFU)) || (response[12] != (uint8_t)(crc >> 8U)))
-  {
-    *failure_status = XDA_SENSOR_STATUS_CRC_ERROR;
-    return 0U;
-  }
-
-  s_sensor_data.ec_x100 = (uint16_t)(((uint16_t)response[3] << 8U) | response[4]);
-  s_sensor_data.temperature_x10 = (int16_t)(((uint16_t)response[5] << 8U) | response[6]);
-  s_sensor_data.tds_ppm = (uint16_t)(((uint16_t)response[7] << 8U) | response[8]);
-  s_sensor_data.salinity_ppm = (uint16_t)(((uint16_t)response[9] << 8U) | response[10]);
+  s_sensor_data.ec_x100 = ec_x100;
+  s_sensor_data.temperature_x10 = temperature_x10;
+  s_sensor_data.tds_ppm = tds_ppm;
+  s_sensor_data.salinity_ppm = salinity_ppm;
   s_sensor_data.slave_address = s_sensor_address;
-  s_sensor_data.baud_rate = s_sensor_baud_rate;
+  s_sensor_data.baud_rate = ModbusBus_GetBaudRate();
   s_sensor_data.online = 1U;
   s_sensor_data.status = XDA_SENSOR_STATUS_OK;
   s_sensor_data.last_update_tick = HAL_GetTick();
+  s_sensor_data.sample_sequence++;
   s_sensor_data.success_count++;
-
-  return 1U;
+  s_sensor_data.consecutive_failure_count = 0U;
+  s_sensor_data.last_exception_code = 0U;
+  return SENSOR_TASK_EVENT_DATA_UPDATED;
 }
 
-static uint8_t XDA_ReadRealtimeData(void)
+static void XDA_SetFailure(XDA_SensorStatus_t status, uint8_t exception_code)
 {
-  XDA_SensorStatus_t failure_status = XDA_SENSOR_STATUS_TIMEOUT;
-
-  if (XDA_ReadRealtimeDataOnce(&failure_status) != 0U)
+  s_sensor_data.status = status;
+  s_sensor_data.error_count++;
+  s_sensor_data.last_exception_code = exception_code;
+  if (s_sensor_data.consecutive_failure_count < UINT16_MAX)
   {
-    return 1U;
+    s_sensor_data.consecutive_failure_count++;
   }
 
-  s_sensor_data.status = failure_status;
-  s_sensor_data.online = 0U;
-  s_sensor_data.error_count++;
-  return 1U;
+  if ((s_sensor_data.success_count == 0U) ||
+      (s_sensor_data.consecutive_failure_count >= XDA_SENSOR_OFFLINE_FAILURE_THRESHOLD))
+  {
+    s_sensor_data.online = 0U;
+  }
 }

@@ -46,10 +46,16 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # User application sources not managed by STM32CubeMX regeneration
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/app_ui.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/data_logger.c
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/key.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/modbus_bus.c
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/oled.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/periodic_trigger.c
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/xda_sensor.c
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/pressure_sensor.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/sensor_record.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/telemetry_uart.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/uart_dma_support.c
 )
 
 # Add include paths
