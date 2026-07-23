@@ -39,7 +39,18 @@ DSTATUS disk_status (
 {
   DSTATUS stat;
 
+  if ((pdrv >= disk.nbr) || (disk.drv[pdrv] == 0))
+  {
+    return STA_NOINIT;
+  }
+
   stat = disk.drv[pdrv]->disk_status(disk.lun[pdrv]);
+
+  if ((stat & STA_NOINIT) != 0U)
+  {
+    disk.is_initialized[pdrv] = 0U;
+  }
+
   return stat;
 }
 
@@ -52,16 +63,25 @@ DSTATUS disk_initialize (
 	BYTE pdrv				/* Physical drive nmuber to identify the drive */
 )
 {
-  DSTATUS stat = RES_OK;
+  DSTATUS stat;
 
-  if(disk.is_initialized[pdrv] == 0)
+  if ((pdrv >= disk.nbr) || (disk.drv[pdrv] == 0))
   {
+    return STA_NOINIT;
+  }
+
+  stat = disk.drv[pdrv]->disk_status(disk.lun[pdrv]);
+  if ((disk.is_initialized[pdrv] == 0U) ||
+      ((stat & STA_NOINIT) != 0U))
+  {
+    disk.is_initialized[pdrv] = 0U;
     stat = disk.drv[pdrv]->disk_initialize(disk.lun[pdrv]);
-    if(stat == RES_OK)
+    if ((stat & STA_NOINIT) == 0U)
     {
-      disk.is_initialized[pdrv] = 1;
+      disk.is_initialized[pdrv] = 1U;
     }
   }
+
   return stat;
 }
 

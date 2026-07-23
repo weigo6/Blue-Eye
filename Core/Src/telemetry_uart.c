@@ -5,7 +5,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "data_logger.h"
 #include "sensor_record.h"
 #include "uart_dma_support.h"
 
@@ -14,9 +13,6 @@
 static UART_HandleTypeDef *s_telemetry_uart = NULL;
 static TelemetryUartStatus_t s_status;
 static SensorRecord_t s_pending_record;
-static uint32_t s_pending_log_record_count = 0U;
-static uint32_t s_pending_log_overwrite_count = 0U;
-static uint8_t s_pending_log_enabled = 0U;
 static char s_frame[208];
 static uint16_t s_frame_length = 0U;
 static uint32_t s_tx_start_tick = 0U;
@@ -51,8 +47,6 @@ void TelemetryUart_SetEnabled(uint8_t enabled)
 
 void TelemetryUart_RequestSend(const SensorRecord_t *record)
 {
-  const DataLoggerStatus_t *logger_status;
-
   if ((s_status.enabled == 0U) || (s_telemetry_uart == NULL) || (record == NULL))
   {
     return;
@@ -64,10 +58,6 @@ void TelemetryUart_RequestSend(const SensorRecord_t *record)
   }
 
   s_pending_record = *record;
-  logger_status = DataLogger_GetStatus();
-  s_pending_log_enabled = (logger_status != NULL) ? logger_status->enabled : 0U;
-  s_pending_log_record_count = (logger_status != NULL) ? logger_status->record_count : 0U;
-  s_pending_log_overwrite_count = (logger_status != NULL) ? logger_status->overwrite_count : 0U;
   s_status.pending = 1U;
 }
 
@@ -176,7 +166,7 @@ static uint8_t TelemetryUart_BuildFrame(void)
 
   payload_chars = snprintf(payload,
                             sizeof(payload),
-                            "BE,%lu,%u,%u,%u,%u,%d,%ld,%u,%u,%u,%u,%u,%d,%u,%u,%u,%lu,%lu",
+                            "BE,%lu,%u,%u,%u,%u,%d,%ld,%u,%u,%u,%u,%u,%d,%u,%u",
                             (unsigned long)s_pending_record.tick_ms,
                             (unsigned int)s_pending_record.pressure_online,
                             (unsigned int)s_pending_record.pressure_status,
@@ -191,10 +181,7 @@ static uint8_t TelemetryUart_BuildFrame(void)
                             (unsigned int)s_pending_record.ec_x100,
                             (int)s_pending_record.temperature_x10,
                             (unsigned int)s_pending_record.tds_ppm,
-                            (unsigned int)s_pending_record.salinity_ppm,
-                            (unsigned int)s_pending_log_enabled,
-                            (unsigned long)s_pending_log_record_count,
-                            (unsigned long)s_pending_log_overwrite_count);
+                            (unsigned int)s_pending_record.salinity_ppm);
   if ((payload_chars <= 0) || ((size_t)payload_chars >= sizeof(payload)))
   {
     return 0U;

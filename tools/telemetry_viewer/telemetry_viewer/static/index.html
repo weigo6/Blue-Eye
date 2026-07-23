@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark">
+  <title>Blue Eye Telemetry Inspector</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="ambient ambient-one"></div>
+  <div class="ambient ambient-two"></div>
+
+  <main class="app-shell">
+    <header class="topbar glass-panel">
+      <div class="brand-block">
+        <div class="eye-mark" aria-hidden="true"><span></span></div>
+        <div>
+          <p class="eyebrow">BLUE EYE / USART1</p>
+          <h1>遥测数据接口查看器</h1>
+          <p class="subtitle">按 <code>$BE,...*XX\r\n</code> 组帧，保留所有帧外原始字节</p>
+        </div>
+      </div>
+      <div class="connection-summary">
+        <span id="wsBadge" class="status-pill neutral"><i></i>界面连接中</span>
+        <span id="deviceBadge" class="status-pill neutral"><i></i>未连接设备</span>
+      </div>
+    </header>
+
+    <section class="control-panel glass-panel">
+      <div class="section-title-row">
+        <div>
+          <p class="eyebrow">CONNECTION</p>
+          <h2>串口连接</h2>
+        </div>
+        <p id="connectionDetail" class="muted">默认参数：9600 / 8N1 / 无流控</p>
+      </div>
+
+      <div class="control-grid">
+        <label class="field field-port">
+          <span>串口设备</span>
+          <div class="inline-field">
+            <select id="portSelect">
+              <option value="">正在扫描串口…</option>
+            </select>
+            <button id="refreshPortsButton" class="icon-button" type="button" title="刷新串口">↻</button>
+          </div>
+        </label>
+
+        <label class="field">
+          <span>波特率</span>
+          <select id="baudRateSelect">
+            <option>9600</option>
+            <option>19200</option>
+            <option>38400</option>
+            <option>57600</option>
+            <option>115200</option>
+          </select>
+        </label>
+
+        <label class="field compact-field">
+          <span>数据格式</span>
+          <div class="format-value">8 N 1</div>
+        </label>
+
+        <div class="button-cluster">
+          <button id="connectButton" class="button primary" type="button">连接串口</button>
+          <button id="disconnectButton" class="button secondary" type="button" disabled>断开</button>
+          <button id="demoButton" class="button demo" type="button">演示模式</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="stats-grid" aria-label="接收统计">
+      <article class="stat-card glass-panel">
+        <p>接收总量</p>
+        <strong id="rxBytes">0 B</strong>
+        <span id="rawChunkCount">0 个原始块</span>
+      </article>
+      <article class="stat-card glass-panel">
+        <p>有效遥测帧</p>
+        <strong id="validFrames">0</strong>
+        <span id="frameRatio">尚无帧</span>
+      </article>
+      <article class="stat-card glass-panel">
+        <p>设备帧间隔</p>
+        <strong id="deviceInterval">—</strong>
+        <span>目标约 5000 ms</span>
+      </article>
+      <article class="stat-card glass-panel warning-card">
+        <p>帧外噪声</p>
+        <strong id="noiseBytes">0 B</strong>
+        <span id="noiseRecords">0 段</span>
+      </article>
+    </section>
+
+    <section class="sensor-grid">
+      <article class="sensor-card glass-panel">
+        <div class="sensor-header">
+          <div>
+            <p class="eyebrow">PRESSURE SENSOR</p>
+            <h2>压力传感器</h2>
+          </div>
+          <span id="pressureState" class="sensor-state neutral">NO DATA</span>
+        </div>
+        <div class="hero-reading">
+          <strong id="pressureValue">—</strong>
+          <span id="pressureUnit">unit —</span>
+        </div>
+        <dl class="metric-list">
+          <div><dt>读取模式</dt><dd id="pressureMode">—</dd></div>
+          <div><dt>原始值</dt><dd id="pressureRaw">—</dd></div>
+          <div><dt>小数位</dt><dd id="pressureDecimal">—</dd></div>
+          <div><dt>Float 有效</dt><dd id="pressureFloatValid">—</dd></div>
+        </dl>
+      </article>
+
+      <article class="sensor-card glass-panel">
+        <div class="sensor-header">
+          <div>
+            <p class="eyebrow">XDA WATER QUALITY</p>
+            <h2>四合一电极</h2>
+          </div>
+          <span id="xdaState" class="sensor-state neutral">NO DATA</span>
+        </div>
+        <div class="water-metrics">
+          <div><span>EC</span><strong id="ecValue">—</strong><small>×0.01</small></div>
+          <div><span>温度</span><strong id="temperatureValue">—</strong><small>°C</small></div>
+          <div><span>TDS</span><strong id="tdsValue">—</strong><small>ppm</small></div>
+          <div><span>盐度</span><strong id="salinityValue">—</strong><small>ppm</small></div>
+        </div>
+      </article>
+
+      <article class="sensor-card glass-panel protocol-card">
+        <div class="sensor-header">
+          <div>
+            <p class="eyebrow">FRAME HEALTH</p>
+            <h2>协议状态</h2>
+          </div>
+          <span id="checksumState" class="sensor-state neutral">WAITING</span>
+        </div>
+        <dl class="metric-list protocol-list">
+          <div><dt>设备 Tick</dt><dd id="deviceTick">—</dd></div>
+          <div><dt>主机接收时间</dt><dd id="hostReceivedAt">—</dd></div>
+          <div><dt>帧长度</dt><dd id="frameLength">—</dd></div>
+          <div><dt>校验值</dt><dd id="checksumValue">—</dd></div>
+        </dl>
+        <p id="frameError" class="frame-error hidden"></p>
+      </article>
+    </section>
+
+    <section class="trend-panel glass-panel">
+      <div class="section-title-row">
+        <div>
+          <p class="eyebrow">LIVE TREND</p>
+          <h2>最近 60 帧趋势</h2>
+        </div>
+        <p class="muted">各指标独立量程显示，不共用纵轴</p>
+      </div>
+      <canvas id="trendCanvas" height="310" aria-label="遥测趋势图"></canvas>
+    </section>
+
+    <section class="data-panel glass-panel">
+      <div class="section-title-row data-toolbar">
+        <div>
+          <p class="eyebrow">FRAME HISTORY</p>
+          <h2>遥测帧历史</h2>
+        </div>
+        <div class="toolbar-actions">
+          <a class="button ghost" href="/api/export.csv" download>导出 CSV</a>
+          <a class="button ghost" href="/api/export.json" download>导出 JSON</a>
+          <button id="clearButton" class="button danger" type="button">清空记录</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>主机时间</th>
+              <th>Tick</th>
+              <th>Δ Tick</th>
+              <th>校验</th>
+              <th>压力</th>
+              <th>XDA</th>
+              <th>EC</th>
+              <th>温度</th>
+              <th>TDS</th>
+              <th>盐度</th>
+            </tr>
+          </thead>
+          <tbody id="frameTableBody">
+            <tr class="empty-row"><td colspan="10">连接串口或启动演示模式后显示数据</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="raw-panel glass-panel">
+      <div class="section-title-row data-toolbar">
+        <div>
+          <p class="eyebrow">RAW BYTE MONITOR</p>
+          <h2>原始字节与噪声</h2>
+        </div>
+        <div class="filter-group" role="group" aria-label="记录过滤">
+          <button class="filter-button active" data-filter="all" type="button">全部</button>
+          <button class="filter-button" data-filter="frame" type="button">帧</button>
+          <button class="filter-button" data-filter="noise" type="button">噪声</button>
+          <button class="filter-button" data-filter="raw" type="button">读取块</button>
+        </div>
+      </div>
+      <div id="rawRecords" class="raw-records">
+        <div class="raw-empty">这里会完整显示 HEX；非 ASCII 字节不会被替换成无法追溯的乱码。</div>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast hidden" role="status"></div>
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>
+

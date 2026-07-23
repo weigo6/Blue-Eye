@@ -6,7 +6,7 @@
 #include "xda_sensor.h"
 
 #define SENSOR_RECORD_MAGIC 0x52434542UL
-#define SENSOR_RECORD_VERSION 0x0002U
+#define SENSOR_RECORD_VERSION SENSOR_RECORD_FORMAT_VERSION
 
 static uint32_t s_record_sequence = 0U;
 
@@ -14,7 +14,7 @@ static void SensorRecord_PutU16(uint8_t *buffer, uint16_t value);
 static void SensorRecord_PutU32(uint8_t *buffer, uint32_t value);
 static uint32_t SensorRecord_Crc32(const uint8_t *buffer, size_t length);
 
-void SensorRecord_Build(SensorRecord_t *record)
+void SensorRecord_Build(SensorRecord_t *record, uint32_t missed_periods)
 {
   const PressureSensorData_t *pressure_data;
   const XDA_SensorData_t *xda_data;
@@ -28,7 +28,7 @@ void SensorRecord_Build(SensorRecord_t *record)
   pressure_data = PressureSensor_GetData();
   xda_data = XDA_Sensor_GetData();
 
-  s_record_sequence++;
+  s_record_sequence += missed_periods + 1U;
   record->sequence = s_record_sequence;
   record->tick_ms = HAL_GetTick();
 
@@ -61,7 +61,9 @@ void SensorRecord_Build(SensorRecord_t *record)
   }
 }
 
-uint8_t SensorRecord_Serialize(const SensorRecord_t *record, uint8_t *buffer, size_t buffer_size)
+uint8_t SensorRecord_Serialize(const SensorRecord_t *record,
+                               uint8_t *buffer,
+                               size_t buffer_size)
 {
   union
   {
@@ -70,7 +72,9 @@ uint8_t SensorRecord_Serialize(const SensorRecord_t *record, uint8_t *buffer, si
   } pressure_value;
   uint32_t crc;
 
-  if ((record == NULL) || (buffer == NULL) || (buffer_size < SENSOR_RECORD_WIRE_SIZE))
+  if ((record == NULL) ||
+      (buffer == NULL) ||
+      (buffer_size < SENSOR_RECORD_WIRE_SIZE))
   {
     return 0U;
   }
@@ -104,8 +108,8 @@ uint8_t SensorRecord_Serialize(const SensorRecord_t *record, uint8_t *buffer, si
   buffer[56] = record->pressure_exception_code;
   buffer[57] = record->xda_exception_code;
 
-  crc = SensorRecord_Crc32(buffer, 60U);
-  SensorRecord_PutU32(&buffer[60], crc);
+  crc = SensorRecord_Crc32(buffer, SENSOR_RECORD_WIRE_SIZE - 4U);
+  SensorRecord_PutU32(&buffer[SENSOR_RECORD_WIRE_SIZE - 4U], crc);
   return 1U;
 }
 
@@ -134,7 +138,9 @@ static uint32_t SensorRecord_Crc32(const uint8_t *buffer, size_t length)
     crc ^= buffer[index];
     for (bit = 0U; bit < 8U; bit++)
     {
-      crc = ((crc & 1U) != 0U) ? ((crc >> 1U) ^ 0xEDB88320UL) : (crc >> 1U);
+      crc = ((crc & 1U) != 0U)
+              ? ((crc >> 1U) ^ 0xEDB88320UL)
+              : (crc >> 1U);
     }
   }
 

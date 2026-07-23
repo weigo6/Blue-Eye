@@ -23,6 +23,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "periodic_trigger.h"
+#include "sd_diskio.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -298,7 +299,7 @@ void USART3_IRQHandler(void)
 void SDIO_IRQHandler(void)
 {
   /* USER CODE BEGIN SDIO_IRQn 0 */
-
+  SD_Diskio_CaptureIrqStatus(hsd.Instance->STA);
   /* USER CODE END SDIO_IRQn 0 */
   HAL_SD_IRQHandler(&hsd);
   /* USER CODE BEGIN SDIO_IRQn 1 */

@@ -9,6 +9,7 @@ extern "C" {
 #include <stdint.h>
 
 #define SENSOR_RECORD_WIRE_SIZE 64U
+#define SENSOR_RECORD_FORMAT_VERSION 3U
 
 typedef struct
 {
@@ -36,8 +37,10 @@ typedef struct
   uint8_t xda_exception_code;
 } SensorRecord_t;
 
-void SensorRecord_Build(SensorRecord_t *record);
-uint8_t SensorRecord_Serialize(const SensorRecord_t *record, uint8_t *buffer, size_t buffer_size);
+void SensorRecord_Build(SensorRecord_t *record, uint32_t missed_periods);
+uint8_t SensorRecord_Serialize(const SensorRecord_t *record,
+                               uint8_t *buffer,
+                               size_t buffer_size);
 
 #ifdef __cplusplus
 }

@@ -242,6 +242,16 @@ void HAL_SD_AbortCallback(SD_HandleTypeDef *hsd)
 }
 
 /**
+  * @brief SD transfer error callback
+  * @param hsd: SD handle
+  * @retval None
+  */
+void HAL_SD_ErrorCallback(SD_HandleTypeDef *hsd)
+{
+  BSP_SD_ErrorCallback();
+}
+
+/**
   * @brief Tx Transfer completed callback
   * @param hsd: SD handle
   * @retval None
@@ -268,6 +278,15 @@ void HAL_SD_RxCpltCallback(SD_HandleTypeDef *hsd)
   * @note empty (up to the user to fill it in or to remove it if useless)
   */
 __weak void BSP_SD_AbortCallback(void)
+{
+
+}
+
+/**
+  * @brief BSP SD transfer error callback
+  * @retval None
+  */
+__weak void BSP_SD_ErrorCallback(void)
 {
 
 }

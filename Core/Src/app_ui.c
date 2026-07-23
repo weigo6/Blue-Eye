@@ -1,7 +1,8 @@
 #include "app_ui.h"
 
-#include "data_logger.h"
 #include "oled.h"
+#include "sd_logger.h"
+#include "sd_diskio.h"
 #include "telemetry_uart.h"
 #include <limits.h>
 #include <math.h>
@@ -21,8 +22,8 @@ typedef enum
   APP_PAGE_WELCOME = 0,
   APP_PAGE_XDA_DATA,
   APP_PAGE_PRESSURE_DATA,
-  APP_PAGE_SD_CONFIG,
-  APP_PAGE_UART_CONFIG
+  APP_PAGE_UART_CONFIG,
+  APP_PAGE_SD_LOG
 } AppPage_t;
 
 typedef enum
@@ -45,15 +46,14 @@ static void APP_UI_DrawFooterStatus(uint8_t address, const char *status);
 static void APP_UI_ShowWelcomePage(void);
 static void APP_UI_ShowXDADataPage(void);
 static void APP_UI_ShowPressureDataPage(void);
-static void APP_UI_ShowSdConfigPage(void);
 static void APP_UI_ShowUartConfigPage(void);
+static void APP_UI_ShowSdLogPage(void);
 static const char *APP_UI_GetPressureSensorStatusString(PressureSensorStatus_t status);
 static const char *APP_UI_GetXDASensorStatusString(XDA_SensorStatus_t status);
 static const char *APP_UI_GetPressureUnitString(uint16_t unit_code);
 static const char *APP_UI_GetPressureViewString(AppPressureView_t view);
-static const char *APP_UI_GetSdLoggerStateString(const DataLoggerStatus_t *logger_status);
-static const char *APP_UI_GetSdCardStateString(const DataLoggerStatus_t *logger_status);
 static const char *APP_UI_GetTelemetryStateString(const TelemetryUartStatus_t *telemetry_status);
+static const char *APP_UI_GetSdLoggerStateString(const SDLoggerStatus_t *logger_status);
 static void APP_UI_FormatPressureValue(char *buffer, size_t buffer_size, int16_t raw_value, uint16_t decimal_point);
 static void APP_UI_FormatPressureFloatValue(char *buffer, size_t buffer_size, float value, uint16_t decimal_point);
 static void APP_UI_FormatSignedX10(char *buffer, size_t buffer_size, int32_t value_x10);
@@ -81,11 +81,11 @@ void APP_UI_HandleKeyEvent(KeyEvent_t event)
       }
       else if (s_current_page == APP_PAGE_PRESSURE_DATA)
       {
-        APP_UI_ShowSdConfigPage();
-      }
-      else if (s_current_page == APP_PAGE_SD_CONFIG)
-      {
         APP_UI_ShowUartConfigPage();
+      }
+      else if (s_current_page == APP_PAGE_UART_CONFIG)
+      {
+        APP_UI_ShowSdLogPage();
       }
       else
       {
@@ -104,14 +104,6 @@ void APP_UI_HandleKeyEvent(KeyEvent_t event)
                                      : PRESSURE_SENSOR_READ_MODE_RAW);
         APP_UI_ShowPressureDataPage();
       }
-      else if (s_current_page == APP_PAGE_SD_CONFIG)
-      {
-        const DataLoggerStatus_t *logger_status = DataLogger_GetStatus();
-        uint8_t logger_enabled = (logger_status != NULL) ? logger_status->enabled : 0U;
-
-        DataLogger_SetEnabled((uint8_t)(logger_enabled == 0U));
-        APP_UI_ShowSdConfigPage();
-      }
       else if (s_current_page == APP_PAGE_UART_CONFIG)
       {
         const TelemetryUartStatus_t *telemetry_status = TelemetryUart_GetStatus();
@@ -119,6 +111,26 @@ void APP_UI_HandleKeyEvent(KeyEvent_t event)
 
         TelemetryUart_SetEnabled((uint8_t)(telemetry_enabled == 0U));
         APP_UI_ShowUartConfigPage();
+      }
+      break;
+
+    case KEY_EVENT_SAFE_EJECT_HOLD:
+      if (s_current_page == APP_PAGE_SD_LOG)
+      {
+        const SDLoggerStatus_t *logger_status = SDLogger_GetStatus();
+
+        if ((logger_status != NULL) &&
+            (logger_status->state == SD_LOGGER_STATE_ACTIVE))
+        {
+          SDLogger_RequestSafeEject();
+        }
+        else if ((logger_status != NULL) &&
+                 ((logger_status->state == SD_LOGGER_STATE_SAFE_TO_REMOVE) ||
+                  (logger_status->state == SD_LOGGER_STATE_ERROR)))
+        {
+          SDLogger_RequestResume();
+        }
+        APP_UI_ShowSdLogPage();
       }
       break;
 
@@ -163,13 +175,13 @@ void APP_UI_UpdateXDASensorData(const XDA_SensorData_t *sensor_data)
 
 void APP_UI_RefreshServiceStatus(void)
 {
-  if (s_current_page == APP_PAGE_SD_CONFIG)
-  {
-    APP_UI_ShowSdConfigPage();
-  }
-  else if (s_current_page == APP_PAGE_UART_CONFIG)
+  if (s_current_page == APP_PAGE_UART_CONFIG)
   {
     APP_UI_ShowUartConfigPage();
+  }
+  else if (s_current_page == APP_PAGE_SD_LOG)
+  {
+    APP_UI_ShowSdLogPage();
   }
 }
 
@@ -350,36 +362,6 @@ static void APP_UI_ShowPressureDataPage(void)
   OLED_UpdateScreen();
 }
 
-static void APP_UI_ShowSdConfigPage(void)
-{
-  const DataLoggerStatus_t *logger_status = DataLogger_GetStatus();
-  char value_buffer[24];
-
-  s_current_page = APP_PAGE_SD_CONFIG;
-  APP_UI_SetLed(1U);
-
-  OLED_Fill(OLED_COLOR_BLACK);
-  APP_UI_DrawPageHeader("SD CONFIG");
-  APP_UI_DrawLabeledValueRow(16U, "LOG", APP_UI_GetSdLoggerStateString(logger_status));
-  APP_UI_DrawLabeledValueRow(28U, "CARD", APP_UI_GetSdCardStateString(logger_status));
-
-  if ((logger_status != NULL) && (logger_status->enabled != 0U))
-  {
-    (void)snprintf(value_buffer, sizeof(value_buffer), "%lu",
-                   (unsigned long)logger_status->record_count);
-    APP_UI_DrawLabeledValueRow(40U, "REC", value_buffer);
-  }
-  else
-  {
-    APP_UI_DrawLabeledValueRow(40U,
-                               "SAFE",
-                               ((logger_status != NULL) && (logger_status->mounted != 0U)) ? "WAIT" : "REMOVE");
-  }
-
-  APP_UI_DrawCenteredString(APP_UI_FOOTER_Y, "HOLD: LOG ON/OFF");
-  OLED_UpdateScreen();
-}
-
 static void APP_UI_ShowUartConfigPage(void)
 {
   const TelemetryUartStatus_t *telemetry_status = TelemetryUart_GetStatus();
@@ -405,6 +387,105 @@ static void APP_UI_ShowUartConfigPage(void)
   }
 
   APP_UI_DrawCenteredString(APP_UI_FOOTER_Y, "HOLD: UART ON/OFF");
+  OLED_UpdateScreen();
+}
+
+static void APP_UI_ShowSdLogPage(void)
+{
+  const SDLoggerStatus_t *logger_status = SDLogger_GetStatus();
+  const SD_DiskioDiagnostics_t *disk_diagnostics = SD_Diskio_GetDiagnostics();
+  char value_buffer[24];
+  const char *footer = "INSERT FAT32 CARD";
+  uint8_t led_on = 0U;
+
+  s_current_page = APP_PAGE_SD_LOG;
+
+  OLED_Fill(OLED_COLOR_BLACK);
+  APP_UI_DrawPageHeader("SD LOGGER");
+  APP_UI_DrawLabeledValueRow(16U,
+                             "STATE",
+                             APP_UI_GetSdLoggerStateString(logger_status));
+
+  if ((logger_status != NULL) &&
+      (logger_status->state == SD_LOGGER_STATE_ERROR))
+  {
+    (void)snprintf(value_buffer,
+                   sizeof(value_buffer),
+                   "%08lX",
+                   (unsigned long)logger_status->last_error);
+    APP_UI_DrawLabeledValueRow(28U, "FAT", value_buffer);
+  }
+  else if ((logger_status != NULL) && (logger_status->current_file[0] != '\0'))
+  {
+    APP_UI_DrawLabeledValueRow(28U, "FILE", logger_status->current_file);
+  }
+  else
+  {
+    APP_UI_DrawLabeledValueRow(28U, "FILE", "--");
+  }
+
+  if ((logger_status != NULL) &&
+      (logger_status->state == SD_LOGGER_STATE_ERROR))
+  {
+    (void)snprintf(value_buffer,
+                   sizeof(value_buffer),
+                   "%02X/%08lX",
+                   (unsigned int)((disk_diagnostics != NULL)
+                                    ? disk_diagnostics->stage
+                                    : 0U),
+                   (unsigned long)((disk_diagnostics != NULL)
+                                     ? disk_diagnostics->hal_error
+                                     : 0U));
+    APP_UI_DrawLabeledValueRow(40U, "IO", value_buffer);
+  }
+  else
+  {
+    (void)snprintf(value_buffer,
+                   sizeof(value_buffer),
+                   "%u",
+                   (unsigned int)((logger_status != NULL)
+                                    ? logger_status->queue_depth
+                                    : 0U));
+    APP_UI_DrawLabeledValueRow(40U, "QUEUE", value_buffer);
+  }
+
+  if (logger_status != NULL)
+  {
+    switch (logger_status->state)
+    {
+      case SD_LOGGER_STATE_ACTIVE:
+        footer = "HOLD 3S: EJECT";
+        led_on = 1U;
+        break;
+
+      case SD_LOGGER_STATE_EJECTING:
+        footer = "DO NOT REMOVE";
+        led_on = 1U;
+        break;
+
+      case SD_LOGGER_STATE_SAFE_TO_REMOVE:
+        footer = "SAFE TO REMOVE";
+        break;
+
+      case SD_LOGGER_STATE_MOUNTING:
+        footer = "MOUNTING...";
+        led_on = 1U;
+        break;
+
+      case SD_LOGGER_STATE_ERROR:
+        footer = (logger_status->format_required != 0U)
+                   ? "FORMAT FAT32"
+                   : "HOLD 3S: RETRY";
+        break;
+
+      case SD_LOGGER_STATE_NO_CARD:
+      default:
+        break;
+    }
+  }
+
+  APP_UI_SetLed(led_on);
+  APP_UI_DrawCenteredString(APP_UI_FOOTER_Y, footer);
   OLED_UpdateScreen();
 }
 
@@ -526,41 +607,6 @@ static const char *APP_UI_GetPressureViewString(AppPressureView_t view)
   return (view == APP_PRESSURE_VIEW_FLOAT) ? "FLOAT" : "RAW";
 }
 
-static const char *APP_UI_GetSdLoggerStateString(const DataLoggerStatus_t *logger_status)
-{
-  if (logger_status == NULL)
-  {
-    return "UNKNOWN";
-  }
-
-  if (logger_status->enabled != 0U)
-  {
-    return "ENABLED";
-  }
-
-  return (logger_status->mounted != 0U) ? "CLOSING" : "DISABLED";
-}
-
-static const char *APP_UI_GetSdCardStateString(const DataLoggerStatus_t *logger_status)
-{
-  if (logger_status == NULL)
-  {
-    return "UNKNOWN";
-  }
-
-  if (logger_status->card_present == 0U)
-  {
-    return "NO CARD";
-  }
-
-  if (logger_status->format_required != 0U)
-  {
-    return "FORMAT";
-  }
-
-  return (logger_status->mounted != 0U) ? "MOUNTED" : "IDLE";
-}
-
 static const char *APP_UI_GetTelemetryStateString(const TelemetryUartStatus_t *telemetry_status)
 {
   if (telemetry_status == NULL)
@@ -581,6 +627,36 @@ static const char *APP_UI_GetTelemetryStateString(const TelemetryUartStatus_t *t
     return "QUEUED";
   }
   return "ENABLED";
+}
+
+static const char *APP_UI_GetSdLoggerStateString(const SDLoggerStatus_t *logger_status)
+{
+  if (logger_status == NULL)
+  {
+    return "UNKNOWN";
+  }
+
+  switch (logger_status->state)
+  {
+    case SD_LOGGER_STATE_MOUNTING:
+      return "MOUNTING";
+
+    case SD_LOGGER_STATE_ACTIVE:
+      return "ACTIVE";
+
+    case SD_LOGGER_STATE_EJECTING:
+      return "FLUSHING";
+
+    case SD_LOGGER_STATE_SAFE_TO_REMOVE:
+      return "SAFE";
+
+    case SD_LOGGER_STATE_ERROR:
+      return "ERROR";
+
+    case SD_LOGGER_STATE_NO_CARD:
+    default:
+      return "NO CARD";
+  }
 }
 
 static void APP_UI_FormatPressureValue(char *buffer, size_t buffer_size, int16_t raw_value, uint16_t decimal_point)

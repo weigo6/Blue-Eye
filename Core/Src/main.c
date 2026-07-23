@@ -29,12 +29,12 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "app_ui.h"
-#include "data_logger.h"
 #include "key.h"
 #include "modbus_bus.h"
 #include "oled.h"
 #include "periodic_trigger.h"
 #include "pressure_sensor.h"
+#include "sd_logger.h"
 #include "sensor_record.h"
 #include "telemetry_uart.h"
 #include "xda_sensor.h"
@@ -121,8 +121,8 @@ int main(void)
   XDA_Sensor_Init(0x02U);
   PressureSensor_Init(0x01U);
   PeriodicTrigger_Init();
-  DataLogger_Init();
   TelemetryUart_Init(&huart1);
+  SDLogger_Init();
   if (HAL_TIM_Base_Start_IT(&htim6) != HAL_OK)
   {
     Error_Handler();
@@ -142,12 +142,21 @@ int main(void)
     /* USER CODE BEGIN 3 */
     SensorTaskEvent_t pressure_sensor_event;
     SensorTaskEvent_t xda_sensor_event;
+    PeriodicTriggerEvent_t periodic_event;
     uint8_t periodic_5s_event;
-    uint8_t logger_status_changed;
+    uint8_t periodic_status_changed;
     uint8_t telemetry_status_changed;
+    uint8_t sd_logger_status_changed;
     KeyEvent_t key_event;
 
     ModbusBus_Task();
+
+    KEY_Task();
+    key_event = KEY_GetEvent();
+    if (key_event != KEY_EVENT_NONE)
+    {
+      APP_UI_HandleKeyEvent(key_event);
+    }
 
     if (s_sensor_poll_prefer_pressure != 0U)
     {
@@ -175,31 +184,30 @@ int main(void)
       APP_UI_UpdatePressureSensorData(PressureSensor_GetData());
     }
 
-    KEY_Task();
-    key_event = KEY_GetEvent();
-    if (key_event != KEY_EVENT_NONE)
-    {
-      APP_UI_HandleKeyEvent(key_event);
-    }
-
-    periodic_5s_event = PeriodicTrigger_Consume5sEvent();
+    periodic_status_changed = 0U;
+    sd_logger_status_changed = 0U;
+    periodic_5s_event = PeriodicTrigger_Consume5sEvent(&periodic_event);
     if (periodic_5s_event != 0U)
     {
-      SensorRecord_Build(&s_periodic_record);
-      DataLogger_RequestSnapshot(&s_periodic_record);
+      SensorRecord_Build(&s_periodic_record, periodic_event.missed_periods);
       TelemetryUart_RequestSend(&s_periodic_record);
+      sd_logger_status_changed |= SDLogger_Submit(&s_periodic_record);
+      periodic_status_changed = 1U;
     }
 
     telemetry_status_changed = TelemetryUart_Task();
-    logger_status_changed = 0U;
-    if (ModbusBus_IsBusy() == 0U)
-    {
-      logger_status_changed = DataLogger_Task();
-    }
+    sd_logger_status_changed |= SDLogger_Task((ModbusBus_IsBusy() == 0U) ? 1U : 0U);
 
-    if ((logger_status_changed != 0U) || (telemetry_status_changed != 0U))
+    if ((telemetry_status_changed != 0U) ||
+        (periodic_status_changed != 0U) ||
+        (sd_logger_status_changed != 0U))
     {
       APP_UI_RefreshServiceStatus();
+    }
+
+    if ((SDLogger_HasPendingIo() != 0U) && (ModbusBus_IsBusy() == 0U))
+    {
+      continue;
     }
 
     __WFI();

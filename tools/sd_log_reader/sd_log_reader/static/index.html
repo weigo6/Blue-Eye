@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Blue Eye · SD 日志解析器</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand-mark" aria-hidden="true"><span></span></div>
+      <div>
+        <p class="eyebrow">BLUE EYE / DATA TOOL</p>
+        <h1>SD 日志解析器</h1>
+      </div>
+      <div class="topbar-actions">
+        <span id="source-state" class="state-pill neutral">未读取</span>
+        <a class="button ghost" href="/docs" target="_blank" rel="noreferrer">API</a>
+      </div>
+    </header>
+
+    <main>
+      <section class="source-panel panel">
+        <div class="section-heading compact">
+          <div>
+            <p class="eyebrow">SOURCE</p>
+            <h2>选择 SD 卡或日志文件</h2>
+          </div>
+          <button id="browse-button" class="button secondary" type="button">浏览目录</button>
+        </div>
+        <div class="path-row">
+          <input id="source-path" type="text" autocomplete="off"
+                 placeholder="例如 E:\、E:\LOG 或 E:\LOG\LOG00000.BIN">
+          <button id="load-button" class="button primary" type="button">读取并校验</button>
+        </div>
+        <p class="hint">支持 SD 卡根目录、LOG 目录和单个 BIN 文件。工具只读访问源文件，不会修改 SD 卡内容。</p>
+        <div id="drive-list" class="drive-list"><span class="muted">正在枚举本机磁盘…</span></div>
+      </section>
+
+      <section id="empty-state" class="empty-state panel">
+        <div class="empty-orbit" aria-hidden="true"><span></span></div>
+        <h2>等待一份 Blue Eye 日志</h2>
+        <p>读取后可查看文件完整性、CRC、序号缺口、传感器状态、趋势曲线和逐条原始记录。</p>
+      </section>
+
+      <div id="workspace" class="workspace hidden">
+        <section class="summary-grid" aria-label="日志摘要">
+          <article class="summary-card accent-blue">
+            <span>有效记录</span><strong id="total-records">—</strong><small id="record-subtitle">—</small>
+          </article>
+          <article class="summary-card accent-cyan">
+            <span>日志文件</span><strong id="total-files">—</strong><small id="file-subtitle">—</small>
+          </article>
+          <article class="summary-card accent-amber">
+            <span>序号缺失</span><strong id="missing-sequences">—</strong><small id="gap-subtitle">—</small>
+          </article>
+          <article class="summary-card accent-red">
+            <span>解析问题</span><strong id="total-issues">—</strong><small id="issue-subtitle">—</small>
+          </article>
+        </section>
+
+        <section class="panel">
+          <div class="section-heading">
+            <div><p class="eyebrow">INTEGRITY</p><h2>文件完整性</h2></div>
+            <div class="export-actions">
+              <a class="button secondary" href="/api/export.csv">导出 CSV</a>
+              <a class="button secondary" href="/api/export.json">导出 JSON</a>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table class="file-table">
+              <thead><tr>
+                <th>文件</th><th>状态</th><th>大小</th><th>有效记录</th><th>序号范围</th><th>Tick 范围</th><th>问题</th>
+              </tr></thead>
+              <tbody id="file-table-body"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="section-heading">
+            <div><p class="eyebrow">MEASUREMENTS</p><h2>测量统计</h2></div>
+            <span class="muted">只统计通过魔数、版本和 CRC 校验的记录</span>
+          </div>
+          <div id="metric-grid" class="metric-grid"></div>
+        </section>
+
+        <section class="panel">
+          <div class="section-heading">
+            <div><p class="eyebrow">TREND</p><h2>全量日志趋势预览</h2></div>
+            <span id="preview-note" class="muted"></span>
+          </div>
+          <div class="chart-grid">
+            <article class="chart-card"><h3>压力</h3><canvas id="pressure-chart"></canvas></article>
+            <article class="chart-card"><h3>温度 °C</h3><canvas id="temperature-chart"></canvas></article>
+            <article class="chart-card"><h3>电导率</h3><canvas id="ec-chart"></canvas></article>
+            <article class="chart-card"><h3>TDS / 盐度 ppm</h3><canvas id="ppm-chart"></canvas></article>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="section-heading">
+            <div><p class="eyebrow">RECORDS</p><h2>逐条记录</h2></div>
+            <div class="pager">
+              <button id="prev-page" class="icon-button" type="button" aria-label="上一页">←</button>
+              <span id="page-label">—</span>
+              <button id="next-page" class="icon-button" type="button" aria-label="下一页">→</button>
+            </div>
+          </div>
+          <div class="table-wrap records-wrap">
+            <table class="records-table">
+              <thead><tr>
+                <th>#</th><th>文件 / 记录</th><th>Sequence</th><th>Tick ms</th><th>压力</th><th>EC</th><th>温度</th><th>TDS</th><th>盐度</th><th>压力状态</th><th>XDA 状态</th>
+              </tr></thead>
+              <tbody id="records-body"></tbody>
+            </table>
+          </div>
+          <p class="hint">点击任意记录查看字段、采样新鲜度、异常码和 CRC 明细。</p>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <dialog id="browser-dialog" class="browser-dialog">
+    <form method="dialog" class="dialog-shell">
+      <div class="dialog-heading">
+        <div><p class="eyebrow">LOCAL FILES</p><h2>浏览目录</h2></div>
+        <button class="icon-button" value="cancel" aria-label="关闭">×</button>
+      </div>
+      <div class="browser-toolbar">
+        <button id="browser-parent" class="icon-button" type="button" aria-label="上级目录">↑</button>
+        <input id="browser-path" type="text" autocomplete="off">
+        <button id="browser-go" class="button secondary" type="button">转到</button>
+      </div>
+      <div id="browser-list" class="browser-list"></div>
+      <div class="dialog-actions">
+        <span id="browser-hint" class="muted"></span>
+        <button id="browser-select" class="button primary" type="button">读取当前目录</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="record-dialog" class="record-dialog">
+    <form method="dialog" class="dialog-shell record-shell">
+      <div class="dialog-heading">
+        <div><p class="eyebrow">RECORD DETAIL</p><h2 id="record-title">记录明细</h2></div>
+        <button class="icon-button" value="cancel" aria-label="关闭">×</button>
+      </div>
+      <div id="record-detail" class="record-detail"></div>
+    </form>
+  </dialog>
+
+  <div id="loading" class="loading-layer hidden" role="status" aria-live="polite">
+    <div class="spinner"></div><strong>正在扫描并校验日志…</strong><span>大文件可能需要几秒钟</span>
+  </div>
+  <div id="toast" class="toast hidden" role="alert"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
